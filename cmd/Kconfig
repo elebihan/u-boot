@@ -471,6 +471,11 @@ config CMD_TFTPPUT
 	help
 	  TFTP put command, for uploading files to a server
 
+config CMD_TFTPGET
+	bool "tftp get"
+	help
+	  TFTP get command, for getting files from a server (with MD5 sum check)
+
 config CMD_TFTPSRV
 	bool "tftpsrv"
 	help

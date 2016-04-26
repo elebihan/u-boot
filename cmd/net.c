@@ -11,6 +11,9 @@
 #include <common.h>
 #include <command.h>
 #include <net.h>
+#include <malloc.h>
+#include <mapmem.h>
+#include <u-boot/md5.h>
 
 static int netboot_common(enum proto_t, cmd_tbl_t *, int, char * const []);
 
@@ -51,7 +54,110 @@ U_BOOT_CMD(
 	tftpput,	4,	1,	do_tftpput,
 	"TFTP put command, for uploading files to a server",
 	"Address Size [[hostIPaddr:]filename]"
-);
+	);
+#endif
+
+#ifdef CONFIG_CMD_TFTPGET
+
+#define SUMFILE_EXT ".md5sum"
+
+int do_tftpget(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+{
+	int ret = CMD_RET_FAILURE;
+	char **new_argv = NULL;
+	char *sumfile = NULL;
+	size_t len = 0;
+	int pos = argc - 1, n_chars = 0, i;
+	u8 rsum[16], vsum[16];
+	char *text = NULL;
+	void *data = NULL;
+
+	new_argv = malloc(argc * sizeof(char*));
+	if (!new_argv) {
+		return CMD_RET_FAILURE;
+	}
+
+	memcpy(new_argv, argv, argc * sizeof(char*));
+
+	len = strlen(argv[pos]) + strlen(SUMFILE_EXT) + 1;
+
+	sumfile = malloc(len * sizeof(char));
+	if (!sumfile) {
+		free(new_argv);
+		return CMD_RET_FAILURE;
+	}
+
+	n_chars = snprintf(sumfile, len, "%s" SUMFILE_EXT, argv[pos]);
+	if (n_chars != len - 1) {
+		free(new_argv);
+		free(sumfile);
+		return CMD_RET_FAILURE;
+	}
+
+	new_argv[pos] = sumfile;
+
+	ret = netboot_common(TFTPGET, cmdtp, argc, new_argv);
+
+	free(new_argv);
+	free(sumfile);
+
+	if (ret != CMD_RET_SUCCESS) {
+		return CMD_RET_FAILURE;
+	}
+
+	if (net_boot_file_size < 32) {
+		printf("Invalid MD5 sum file\n");
+		return CMD_RET_FAILURE;
+	}
+
+	text = (char*)map_sysmem(load_addr, net_boot_file_size);
+	for (i = 0; i < net_boot_file_size; i++) {
+		if ((text[i] == ' ') || (text[i] == '\t')) {
+			text[i] = '\0';
+			break;
+		}
+	}
+
+	printf("MD5 sum for %s: %s\n", argv[pos], text);
+
+	if (strlen(text) < 32) {
+		printf("Invalid MD5 sum\n");
+		unmap_sysmem(text);
+		return CMD_RET_FAILURE;
+	}
+
+	for (i = 0; i < 16; i++) {
+		char *nullp = text + (i + 1) * 2;
+		char end = *nullp;
+
+		*nullp = '\0';
+		*(u8 *)(rsum + i) = simple_strtoul(text + (i * 2), NULL, 16);
+		*nullp = end;
+	}
+
+	unmap_sysmem(text);
+
+	ret = netboot_common(TFTPGET, cmdtp, argc, argv);
+	if (ret != CMD_RET_SUCCESS) {
+		return CMD_RET_FAILURE;
+	}
+
+	data = map_sysmem(load_addr, net_boot_file_size);
+	md5_wd(data, net_boot_file_size, vsum, CHUNKSZ_MD5);
+	unmap_sysmem(data);
+
+	ret = memcmp(rsum, vsum, 16)? CMD_RET_FAILURE: CMD_RET_SUCCESS;
+	printf("MD5 sum verification %s\n",
+	       (ret == CMD_RET_SUCCESS)? "OK": "KO");
+
+	return ret;
+}
+
+U_BOOT_CMD(
+	tftpget,	3,	1,	do_tftpget,
+	"TFTP get command, for getting files from a server (with MD5 sum check)",
+	"[loadAddress] [[hostIPaddr:]bootfilename]"
+	);
 #endif
 
 #ifdef CONFIG_CMD_TFTPSRV
